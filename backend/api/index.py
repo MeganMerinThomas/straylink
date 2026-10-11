@@ -125,6 +125,51 @@ class AuthResponse(BaseModel):
     user: dict
 
 
+class CreateReportRequest(BaseModel):
+    animal_type: str
+    condition: str
+    description: str
+    location_label: str = ""
+    latitude: float | None = None
+    longitude: float | None = None
+
+    @field_validator("animal_type")
+    @classmethod
+    def animal_type_valid(cls, v: str) -> str:
+        if v not in ("Dog", "Cat", "Other"):
+            raise ValueError("animal_type must be Dog, Cat, or Other")
+        return v
+
+    @field_validator("condition")
+    @classmethod
+    def condition_valid(cls, v: str) -> str:
+        if v not in ("Injured", "Sick", "Healthy"):
+            raise ValueError("condition must be Injured, Sick, or Healthy")
+        return v
+
+
+class UpdateStatusRequest(BaseModel):
+    status: str
+
+    @field_validator("status")
+    @classmethod
+    def status_valid(cls, v: str) -> str:
+        if v not in ("Reported", "Claimed", "En Route", "Collected", "At Vet"):
+            raise ValueError("Invalid status")
+        return v
+
+
+class UpdateRatingRequest(BaseModel):
+    rating: int
+
+    @field_validator("rating")
+    @classmethod
+    def rating_valid(cls, v: int) -> int:
+        if v < 1 or v > 5:
+            raise ValueError("Rating must be between 1 and 5")
+        return v
+
+
 # ── Endpoints ────────────────────────────────────────────────────────
 @app.get("/api/health")
 async def health():
@@ -221,3 +266,148 @@ async def login(body: LoginRequest):
 async def me(profile: dict = Depends(current_user)):
     """Return the authenticated user's profile."""
     return profile
+
+
+# ── Report endpoints ─────────────────────────────────────────────────
+@app.post("/api/reports")
+async def create_report(
+    body: CreateReportRequest,
+    profile: dict = Depends(current_user),
+):
+    """Create a new stray report for the logged-in user."""
+    conn = _get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            """
+            INSERT INTO public.reports
+                (user_id, animal_type, condition, description,
+                 location_label, latitude, longitude)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING *
+            """,
+            (
+                profile["id"],
+                body.animal_type,
+                body.condition,
+                body.description,
+                body.location_label,
+                body.latitude,
+                body.longitude,
+            ),
+        )
+        row = dict(cur.fetchone())
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+    return row
+
+
+@app.get("/api/reports")
+async def list_reports(profile: dict = Depends(current_user)):
+    """
+    List reports.
+    Rescuers see every report (newest first) with the reporter's name.
+    Reporters and pet-owners see only their own reports.
+    """
+    conn = _get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        if profile["role"] == "rescuer":
+            cur.execute(
+                """
+                SELECT r.*, p.full_name AS reporter_name
+                  FROM public.reports r
+                  LEFT JOIN public.profiles p ON r.user_id = p.id
+                 ORDER BY r.created_at DESC
+                """,
+            )
+        else:
+            cur.execute(
+                """
+                SELECT r.*, p.full_name AS reporter_name
+                  FROM public.reports r
+                  LEFT JOIN public.profiles p ON r.user_id = p.id
+                 WHERE r.user_id = %s
+                 ORDER BY r.created_at DESC
+                """,
+                (profile["id"],),
+            )
+        rows = [dict(r) for r in cur.fetchall()]
+        cur.close()
+    finally:
+        conn.close()
+    return rows
+
+
+@app.patch("/api/reports/{report_id}/status")
+async def update_report_status(
+    report_id: str,
+    body: UpdateStatusRequest,
+    profile: dict = Depends(current_user),
+):
+    """Rescuers only: set report status and record rescuer_id."""
+    if profile["role"] != "rescuer":
+        raise HTTPException(status_code=403, detail="Only rescuers can update report status")
+
+    conn = _get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            """
+            UPDATE public.reports
+               SET status     = %s,
+                   rescuer_id = %s,
+                   updated_at = now()
+             WHERE id = %s
+             RETURNING *
+            """,
+            (body.status, profile["id"], report_id),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Report not found")
+        conn.commit()
+        cur.close()
+        return dict(row)
+    finally:
+        conn.close()
+
+
+@app.patch("/api/reports/{report_id}/rating")
+async def rate_report(
+    report_id: str,
+    body: UpdateRatingRequest,
+    profile: dict = Depends(current_user),
+):
+    """Only the report owner can rate it, 1 to 5."""
+    conn = _get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            "SELECT user_id FROM public.reports WHERE id = %s",
+            (report_id,),
+        )
+        existing = cur.fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Report not found")
+        if str(existing["user_id"]) != str(profile["id"]):
+            raise HTTPException(status_code=403, detail="Only the report owner can rate it")
+
+        cur.execute(
+            """
+            UPDATE public.reports
+               SET rating     = %s,
+                   updated_at = now()
+             WHERE id = %s
+             RETURNING *
+            """,
+            (body.rating, report_id),
+        )
+        row = dict(cur.fetchone())
+        conn.commit()
+        cur.close()
+        return row
+    finally:
+        conn.close()

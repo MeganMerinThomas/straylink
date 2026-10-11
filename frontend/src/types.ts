@@ -33,8 +33,28 @@ export interface ReportData {
   description: string;
 }
 
-// ── Submission outcome ──────────────────────────────────────────────
-export type ReportStatus = 'idle' | 'sending' | 'success' | 'failure';
+// ── Submission UI state (for the submit flow) ───────────────────────
+export type SubmissionState = 'idle' | 'sending' | 'success' | 'failure';
+
+// ── Report (from the database) ──────────────────────────────────────
+export type ReportDbStatus = 'Reported' | 'Claimed' | 'En Route' | 'Collected' | 'At Vet';
+
+export interface Report {
+  id: string;
+  user_id: string;
+  animal_type: AnimalType;
+  condition: AnimalCondition;
+  description: string;
+  location_label: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  status: ReportDbStatus;
+  rescuer_id: string | null;
+  rating: number | null;
+  created_at: string;
+  updated_at: string;
+  reporter_name?: string;
+}
 
 // ── Profile (from the backend) ──────────────────────────────────────
 export interface Profile {

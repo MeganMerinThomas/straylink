@@ -4,13 +4,20 @@
  * The frontend never calls Supabase directly and never contains any keys.
  */
 
-import type { AuthResponse, Profile } from '../types';
+import type { AuthResponse, Profile, Report } from '../types';
 
 const BASE_URL: string =
   (import.meta as any).env?.VITE_API_BASE_URL ?? '/api';
 
 // Re-export for convenience
-export type { AuthResponse, Profile };
+export type { AuthResponse, Profile, Report };
+
+// ── 401 callback ────────────────────────────────────────────────────
+let _onSessionExpired: (() => void) | null = null;
+
+export function onSessionExpired(cb: () => void): void {
+  _onSessionExpired = cb;
+}
 
 // ── Token storage helpers ───────────────────────────────────────────
 const TOKEN_KEY = 'straylink_access_token';
@@ -43,15 +50,27 @@ async function apiFetch<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
+  const token = getStoredToken();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(options.headers as Record<string, string>),
+  };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
   const res = await fetch(`${BASE_URL}${path}`, {
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
+    headers,
   });
 
   const body = await res.json().catch(() => ({}));
+
+  if (res.status === 401) {
+    clearAuth();
+    _onSessionExpired?.();
+    throw new Error('Your session has expired');
+  }
 
   if (!res.ok) {
     const message =
@@ -62,7 +81,7 @@ async function apiFetch<T>(
   return body as T;
 }
 
-// ── Public API ──────────────────────────────────────────────────────
+// ── Auth API ────────────────────────────────────────────────────────
 export async function apiSignup(
   email: string,
   password: string,
@@ -82,5 +101,44 @@ export async function apiLogin(
   return apiFetch<AuthResponse>('/auth/login', {
     method: 'POST',
     body: JSON.stringify({ email, password }),
+  });
+}
+
+// ── Reports API ─────────────────────────────────────────────────────
+export async function apiCreateReport(data: {
+  animal_type: string;
+  condition: string;
+  description: string;
+  location_label: string;
+  latitude: number | null;
+  longitude: number | null;
+}): Promise<Report> {
+  return apiFetch<Report>('/reports', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function apiGetReports(): Promise<Report[]> {
+  return apiFetch<Report[]>('/reports', { method: 'GET' });
+}
+
+export async function apiUpdateReportStatus(
+  id: string,
+  status: string,
+): Promise<Report> {
+  return apiFetch<Report>(`/reports/${id}/status`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status }),
+  });
+}
+
+export async function apiRateReport(
+  id: string,
+  rating: number,
+): Promise<Report> {
+  return apiFetch<Report>(`/reports/${id}/rating`, {
+    method: 'PATCH',
+    body: JSON.stringify({ rating }),
   });
 }

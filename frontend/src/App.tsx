@@ -4,10 +4,13 @@ import type {
   Profile,
   AuthResponse,
   ReportData,
-  ReportStatus,
   LocationData,
+  Report,
 } from './types';
-import { getStoredToken, getStoredUser, storeAuth, clearAuth } from './api/client';
+import {
+  getStoredToken, getStoredUser, storeAuth, clearAuth,
+  onSessionExpired, apiCreateReport, apiRateReport,
+} from './api/client';
 import PhoneFrame from './components/PhoneFrame';
 import BottomNav from './components/BottomNav';
 import OnboardingScreen from './screens/OnboardingScreen';
@@ -39,8 +42,18 @@ const App: React.FC = () => {
   // ── Report form state ────────────────────────────────
   const [report, setReport] = useState<ReportData>(INITIAL_REPORT);
 
-  // ── Submission status ────────────────────────────────
-  const [reportStatus, setReportStatus] = useState<ReportStatus>('idle');
+  // ── Submission state ─────────────────────────────────
+  const [savedReport, setSavedReport] = useState<Report | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  // ── Register 401 handler ─────────────────────────────
+  useEffect(() => {
+    onSessionExpired(() => {
+      setProfile(null);
+      setScreen('onboarding');
+    });
+  }, []);
 
   // ── Auth handlers ────────────────────────────────────
 
@@ -55,14 +68,82 @@ const App: React.FC = () => {
     setProfile(null);
     setScreen('onboarding');
     setReport(INITIAL_REPORT);
-    setReportStatus('idle');
+    setSavedReport(null);
+    setSubmitError(null);
+    setSubmitting(false);
   }, []);
 
-  // ── Report handlers ──────────────────────────────────
+  const handleSessionExpired = useCallback(() => {
+    setProfile(null);
+    setScreen('onboarding');
+  }, []);
+
+  // ── Submit report ────────────────────────────────────
+
+  const doSubmit = useCallback(async () => {
+    if (!report.location) return;
+    setScreen('confirmation');
+    setSavedReport(null);
+    setSubmitError(null);
+    setSubmitting(true);
+
+    try {
+      const saved = await apiCreateReport({
+        animal_type: report.animalType,
+        condition: report.condition,
+        description: report.description,
+        location_label: report.location.label,
+        latitude: report.location.lat,
+        longitude: report.location.lng,
+      });
+      setSavedReport(saved);
+    } catch (err: unknown) {
+      setSubmitError(err instanceof Error ? err.message : 'Something went wrong');
+    } finally {
+      setSubmitting(false);
+    }
+  }, [report]);
+
+  const handleSubmitReport = useCallback(() => {
+    doSubmit();
+  }, [doSubmit]);
+
+  const handleRetry = useCallback(() => {
+    doSubmit();
+  }, [doSubmit]);
+
+  const handleRateReport = useCallback(async (rating: number) => {
+    if (!savedReport) return;
+    try {
+      const updated = await apiRateReport(savedReport.id, rating);
+      setSavedReport(updated);
+    } catch {
+      // rating failure is non-critical
+    }
+  }, [savedReport]);
+
+  const handleGoHome = useCallback(() => {
+    setScreen('home');
+    setSavedReport(null);
+    setSubmitError(null);
+    setSubmitting(false);
+  }, []);
+
+  const handleNewReport = useCallback(() => {
+    setReport(INITIAL_REPORT);
+    setSavedReport(null);
+    setSubmitError(null);
+    setSubmitting(false);
+    setScreen('report-location');
+  }, []);
+
+  // ── Navigation helpers ───────────────────────────────
 
   const handleReport = useCallback(() => {
     setReport(INITIAL_REPORT);
-    setReportStatus('idle');
+    setSavedReport(null);
+    setSubmitError(null);
+    setSubmitting(false);
     setScreen('report-location');
   }, []);
 
@@ -78,50 +159,12 @@ const App: React.FC = () => {
     [],
   );
 
-  const handleSubmitReport = useCallback(() => {
-    setScreen('confirmation');
-    setReportStatus('sending');
-
-    // Simulate a backend call — 70 % success, 30 % failure
-    setTimeout(() => {
-      const ok = Math.random() < 0.7;
-      setReportStatus(ok ? 'success' : 'failure');
-    }, 1200 + Math.random() * 800);
-  }, []);
-
-  const handleRetry = useCallback(() => {
-    setReportStatus('sending');
-    setTimeout(() => {
-      const ok = Math.random() < 0.7;
-      setReportStatus(ok ? 'success' : 'failure');
-    }, 1200 + Math.random() * 800);
-  }, []);
-
-  const handleGoHome = useCallback(() => {
-    setScreen('home');
-    setReportStatus('idle');
-  }, []);
-
-  const handleNewReport = useCallback(() => {
-    setReport(INITIAL_REPORT);
-    setReportStatus('idle');
-    setScreen('report-location');
-  }, []);
-
   const handleBackToHome = useCallback(() => {
     setScreen('home');
   }, []);
 
   const handleBackToLocation = useCallback(() => {
     setScreen('report-location');
-  }, []);
-
-  const handleNavigate = useCallback((target: Screen) => {
-    if (target === 'report-location') {
-      setReport(INITIAL_REPORT);
-      setReportStatus('idle');
-    }
-    setScreen(target);
   }, []);
 
   // ── Screen renderer ──────────────────────────────────
@@ -137,6 +180,7 @@ const App: React.FC = () => {
             profile={profile}
             onReport={handleReport}
             onLogout={handleLogout}
+            onSessionExpired={handleSessionExpired}
           />
         );
 
@@ -162,11 +206,14 @@ const App: React.FC = () => {
       case 'confirmation':
         return (
           <ConfirmationScreen
-            status={reportStatus}
+            savedReport={savedReport}
+            submitError={submitError}
+            submitting={submitting}
             report={report}
             onRetry={handleRetry}
             onNewReport={handleNewReport}
             onGoHome={handleGoHome}
+            onRate={handleRateReport}
           />
         );
     }
