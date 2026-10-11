@@ -1,12 +1,13 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import type {
   Screen,
-  UserData,
-  UserRole,
+  Profile,
+  AuthResponse,
   ReportData,
   ReportStatus,
   LocationData,
 } from './types';
+import { getStoredToken, getStoredUser, storeAuth, clearAuth } from './api/client';
 import PhoneFrame from './components/PhoneFrame';
 import BottomNav from './components/BottomNav';
 import OnboardingScreen from './screens/OnboardingScreen';
@@ -14,12 +15,6 @@ import HomeScreen from './screens/HomeScreen';
 import ReportLocationScreen from './screens/ReportLocationScreen';
 import ReportDetailsScreen from './screens/ReportDetailsScreen';
 import ConfirmationScreen from './screens/ConfirmationScreen';
-
-const INITIAL_USER: UserData = {
-  phoneOrEmail: '',
-  password: '',
-  role: 'reporter' as UserRole,
-};
 
 const INITIAL_REPORT: ReportData = {
   location: null,
@@ -29,30 +24,44 @@ const INITIAL_REPORT: ReportData = {
 };
 
 const App: React.FC = () => {
-  // ── Navigation state ────────────────────────────────
-  const [screen, setScreen] = useState<Screen>('onboarding');
+  // ── Auth state ────────────────────────────────────────
+  const [profile, setProfile] = useState<Profile | null>(() => {
+    const token = getStoredToken();
+    const user = getStoredUser();
+    return token && user ? user : null;
+  });
 
-  // ── User state (onboarding data) ───────────────────
-  const [user, setUser] = useState<UserData>(INITIAL_USER);
+  // ── Navigation state ──────────────────────────────────
+  const [screen, setScreen] = useState<Screen>(
+    () => (getStoredToken() ? 'home' : 'onboarding'),
+  );
 
-  // ── Report form state ──────────────────────────────
+  // ── Report form state ────────────────────────────────
   const [report, setReport] = useState<ReportData>(INITIAL_REPORT);
 
-  // ── Submission status ──────────────────────────────
+  // ── Submission status ────────────────────────────────
   const [reportStatus, setReportStatus] = useState<ReportStatus>('idle');
 
-  // ── Handlers ───────────────────────────────────────
+  // ── Auth handlers ────────────────────────────────────
 
-  const handleUserChange = useCallback((partial: Partial<UserData>) => {
-    setUser((prev) => ({ ...prev, ...partial }));
-  }, []);
-
-  const handleOnboardingContinue = useCallback(() => {
+  const handleAuth = useCallback((data: AuthResponse) => {
+    storeAuth(data);
+    setProfile(data.user);
     setScreen('home');
   }, []);
 
+  const handleLogout = useCallback(() => {
+    clearAuth();
+    setProfile(null);
+    setScreen('onboarding');
+    setReport(INITIAL_REPORT);
+    setReportStatus('idle');
+  }, []);
+
+  // ── Report handlers ──────────────────────────────────
+
   const handleReport = useCallback(() => {
-    setReport(INITIAL_REPORT);        // reset form for a new report
+    setReport(INITIAL_REPORT);
     setReportStatus('idle');
     setScreen('report-location');
   }, []);
@@ -115,23 +124,19 @@ const App: React.FC = () => {
     setScreen(target);
   }, []);
 
-  // ── Screen renderer ────────────────────────────────
+  // ── Screen renderer ──────────────────────────────────
   const renderScreen = () => {
     switch (screen) {
       case 'onboarding':
-        return (
-          <OnboardingScreen
-            user={user}
-            onUserChange={handleUserChange}
-            onContinue={handleOnboardingContinue}
-          />
-        );
+        return <OnboardingScreen onAuth={handleAuth} />;
 
       case 'home':
+        if (!profile) return <OnboardingScreen onAuth={handleAuth} />;
         return (
           <HomeScreen
-            role={user.role}
+            profile={profile}
             onReport={handleReport}
+            onLogout={handleLogout}
           />
         );
 

@@ -35,3 +35,21 @@ export interface ReportData {
 
 // ── Submission outcome ──────────────────────────────────────────────
 export type ReportStatus = 'idle' | 'sending' | 'success' | 'failure';
+
+// ── Profile (from the backend) ──────────────────────────────────────
+export interface Profile {
+  id: string;
+  email: string;
+  full_name: string;
+  role: UserRole;
+  created_at: string;
+}
+
+// ── Auth response (from the backend) ────────────────────────────────
+export interface AuthResponse {
+  access_token: string;
+  refresh_token: string;
+  expires_in: number;
+  token_type: string;
+  user: Profile;
+}
